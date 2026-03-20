@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="nav">
+  <a href="/dashboard" class="nav-btn">← Back</a>
+  <div class="nav-title">👥 Students</div>
+  <a href="/register_student" class="nav-btn" style="background:var(--accent);color:white;">+ Add</a>
+</div>
+
+<div class="main">
+
+  {% with messages = get_flashed_messages() %}
+  {% if messages %}<div class="flash">{{ messages[0] }}</div>{% endif %}
+  {% endwith %}
+
+  {% if students %}
+  <div style="color:var(--muted);font-size:13px;margin-bottom:12px;">{{ students|length }} students registered</div>
+
+  {% for s in students %}
+  <div class="list-item">
+    <div class="avatar">{{ s.name[0].upper() }}</div>
+    <div>
+      <div class="list-name">{{ s.name }}</div>
+      <div class="list-sub">{{ s.roll_no }}</div>
+    </div>
+    <div class="ml-auto">
+      <form method="POST" action="/delete_student/{{ s.id }}"
+            onsubmit="return confirm('Delete {{ s.name }}?')">
+        <button type="submit" style="background:none;border:none;color:var(--red);font-size:20px;cursor:pointer;">🗑</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+
+  {% else %}
+  <div class="card" style="text-align:center;padding:40px;">
+    <div style="font-size:48px;margin-bottom:12px;">👥</div>
+    <div style="color:var(--muted);margin-bottom:16px;">No students yet.</div>
+    <a href="/register_student" class="btn btn-primary" style="width:auto;display:inline-block;padding:12px 24px;">
+      + Register First Student
+    </a>
+  </div>
+  {% endif %}
+
+</div>
+
+<nav class="bottom-nav">
+  <a href="/dashboard" class="bnav-item"><span class="bnav-icon">🏠</span>Home</a>
+  <a href="/scan" class="bnav-item"><span class="bnav-icon">📷</span>Scan</a>
+  <a href="/report" class="bnav-item"><span class="bnav-icon">📊</span>Report</a>
+  <a href="/students" class="bnav-item active"><span class="bnav-icon">👥</span>Students</a>
+</nav>
+{% endblock %}

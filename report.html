@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="nav">
+  <a href="/dashboard" class="nav-btn">← Back</a>
+  <div class="nav-title">📊 Report</div>
+  <div></div>
+</div>
+
+<div class="main">
+
+  <!-- Mode selector -->
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px;">
+    <a href="/report?mode=daily&date={{ today }}"
+       class="btn btn-sm {{ 'btn-primary' if mode=='daily' else 'btn-outline' }}"
+       style="margin:0;text-align:center;padding:10px;">Daily</a>
+    <a href="/report?mode=weekly&from={{ today }}"
+       class="btn btn-sm {{ 'btn-primary' if mode=='weekly' else 'btn-outline' }}"
+       style="margin:0;text-align:center;padding:10px;">Weekly</a>
+    <a href="/report?mode=range&from={{ date_from }}&to={{ date_to }}"
+       class="btn btn-sm {{ 'btn-primary' if mode=='range' else 'btn-outline' }}"
+       style="margin:0;text-align:center;padding:10px;">Range</a>
+  </div>
+
+  <!-- Filter form -->
+  <div class="card" style="padding:14px;margin-bottom:14px;">
+    <form method="GET">
+      <input type="hidden" name="mode" value="{{ mode }}">
+      {% if mode == 'daily' %}
+      <div class="form-group" style="margin:0;">
+        <label>Select Date</label>
+        <input type="date" name="date" value="{{ date_from }}" style="margin-top:6px;">
+      </div>
+      {% elif mode == 'weekly' %}
+      <div class="form-group" style="margin:0;">
+        <label>Any date in the week</label>
+        <input type="date" name="from" value="{{ date_from }}" style="margin-top:6px;">
+      </div>
+      {% else %}
+      <div class="form-group">
+        <label>From</label>
+        <input type="date" name="from" value="{{ date_from }}">
+      </div>
+      <div class="form-group" style="margin:0;">
+        <label>To</label>
+        <input type="date" name="to" value="{{ date_to }}">
+      </div>
+      {% endif %}
+      <button type="submit" class="btn btn-primary" style="margin-top:12px;">View Report</button>
+    </form>
+  </div>
+
+  <!-- Summary -->
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+    <div style="font-size:13px;color:var(--muted);">{{ date_from }}{% if date_from != date_to %} → {{ date_to }}{% endif %} · {{ total_working }} working days</div>
+  </div>
+
+  <!-- Download buttons -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
+    <a href="/download/csv?from={{ date_from }}&to={{ date_to }}"
+       class="btn btn-outline" style="margin:0;padding:12px;font-size:14px;text-align:center;">
+      ⬇️ Download CSV
+    </a>
+    <a href="/download/pdf?from={{ date_from }}&to={{ date_to }}" target="_blank"
+       class="btn btn-outline" style="margin:0;padding:12px;font-size:14px;text-align:center;">
+      📄 Download PDF
+    </a>
+  </div>
+
+  <!-- Student list -->
+  {% for r in rows %}
+  {% set color = '#10b981' if r.pct >= 75 else ('#f59e0b' if r.pct >= 50 else '#ef4444') %}
+  <div style="background:#16213e;border-radius:14px;padding:14px 16px;margin-bottom:10px;border:1px solid rgba(255,255,255,0.08);">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <div>
+        <div style="font-size:15px;font-weight:600;">{{ r.name }}</div>
+        <div style="font-size:12px;color:var(--muted);">{{ r.roll_no }}</div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:22px;font-weight:700;color:{{ color }};">{{ r.pct }}%</div>
+        <div style="font-size:12px;color:var(--muted);">{{ r.present }}/{{ r.total }} days</div>
+      </div>
+    </div>
+    <!-- Date pills -->
+    {% if working_dates %}
+    <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px;">
+      {% for d in working_dates %}
+      {% if d in r.present_dates %}
+      <div style="background:rgba(16,185,129,0.2);border:1px solid #10b981;color:#10b981;
+                  padding:3px 8px;border-radius:8px;font-size:11px;">
+        {{ d[5:] }} ✓ {{ r.present_dates[d] }}
+      </div>
+      {% else %}
+      <div style="background:rgba(239,68,68,0.1);border:1px solid #ef4444;color:#ef4444;
+                  padding:3px 8px;border-radius:8px;font-size:11px;">
+        {{ d[5:] }} ✗
+      </div>
+      {% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  {% if not rows %}
+  <div class="card" style="text-align:center;padding:30px;">
+    <div style="font-size:36px;">📭</div>
+    <div style="color:var(--muted);margin-top:8px;">No data for this period.</div>
+  </div>
+  {% endif %}
+
+</div>
+
+<nav class="bottom-nav">
+  <a href="/dashboard" class="bnav-item"><span class="bnav-icon">🏠</span>Home</a>
+  <a href="/scan" class="bnav-item"><span class="bnav-icon">📷</span>Scan</a>
+  <a href="/report" class="bnav-item active"><span class="bnav-icon">📊</span>Report</a>
+  <a href="/students" class="bnav-item"><span class="bnav-icon">👥</span>Students</a>
+</nav>
+{% endblock %}

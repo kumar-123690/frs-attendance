@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="nav">
+  <a href="/dashboard" class="nav-btn">← Back</a>
+  <div class="nav-title">📷 Scan Face</div>
+  <div></div>
+</div>
+
+<div class="main">
+
+  <!-- Camera -->
+  <div class="scan-container" style="position:relative;border-radius:16px;overflow:hidden;aspect-ratio:4/3;background:#000;margin-bottom:14px;">
+    <video id="video" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;"></video>
+    <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;">
+      <div id="scan-box" style="width:200px;height:200px;border:3px solid #06b6d4;border-radius:20px;box-shadow:0 0 0 2000px rgba(0,0,0,0.45);"></div>
+    </div>
+  </div>
+
+  <button class="btn btn-scan" id="scan-btn" onclick="captureAndRecognize()">
+    🔍 Scan Student Face
+  </button>
+
+  <div id="scanning-msg" style="text-align:center;color:#94a3b8;font-size:15px;display:none;margin:10px 0;">
+    ⏳ Recognizing face...
+  </div>
+
+  <!-- Match result -->
+  <div id="result-card" style="display:none;background:#16213e;border-radius:16px;padding:20px;text-align:center;margin-bottom:14px;border:1px solid rgba(255,255,255,0.08);">
+    <div id="result-icon" style="font-size:44px;margin-bottom:8px;">😊</div>
+    <div id="result-name" style="font-size:24px;font-weight:700;margin-bottom:4px;"></div>
+    <div id="result-roll" style="color:#94a3b8;font-size:14px;"></div>
+    <div id="result-conf" style="color:#06b6d4;font-size:13px;margin-top:4px;"></div>
+    <div id="confirm-btns" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px;">
+      <button class="btn btn-green btn-sm" onclick="confirmAttendance()" id="confirm-btn">✅ Mark Present</button>
+      <button class="btn btn-outline btn-sm" onclick="resetScan()">🔄 Rescan</button>
+    </div>
+    <div id="already-msg" style="display:none;color:#f59e0b;font-size:14px;margin-top:10px;"></div>
+  </div>
+
+  <!-- No match -->
+  <div id="no-match-card" style="display:none;background:#16213e;border-radius:16px;padding:24px;text-align:center;margin-bottom:14px;">
+    <div style="font-size:40px;margin-bottom:8px;">❌</div>
+    <div id="no-match-msg" style="color:#94a3b8;font-size:14px;margin-bottom:12px;"></div>
+    <button class="btn btn-outline" onclick="resetScan()">🔄 Try Again</button>
+  </div>
+
+  <!-- Today count -->
+  <div style="background:#16213e;border-radius:16px;padding:16px;text-align:center;border:1px solid rgba(255,255,255,0.08);">
+    <div style="font-size:13px;color:#94a3b8;margin-bottom:4px;">Marked today</div>
+    <div style="font-size:30px;font-weight:700;color:#10b981;" id="today-count">-</div>
+    <a href="/report" style="font-size:13px;color:#06b6d4;display:block;margin-top:6px;">View full list →</a>
+  </div>
+
+</div>
+
+<nav class="bottom-nav">
+  <a href="/dashboard" class="bnav-item"><span class="bnav-icon">🏠</span>Home</a>
+  <a href="/scan" class="bnav-item active"><span class="bnav-icon">📷</span>Scan</a>
+  <a href="/report" class="bnav-item"><span class="bnav-icon">📊</span>Report</a>
+  <a href="/students" class="bnav-item"><span class="bnav-icon">👥</span>Students</a>
+</nav>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentStudentId = null;
+let stream = null;
+
+// Start rear camera automatically
+function startCamera(){
+  const constraints = {
+    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 960 } }
+  };
+  navigator.mediaDevices.getUserMedia(constraints)
+  .then(s => { stream = s; document.getElementById('video').srcObject = s; })
+  .catch(() => {
+    // fallback to any camera
+    navigator.mediaDevices.getUserMedia({ video: true })
+    .then(s => { stream = s; document.getElementById('video').srcObject = s; })
+    .catch(e => alert('Camera error: ' + e.message));
+  });
+}
+
+async function captureAndRecognize(){
+  const video = document.getElementById('video');
+  if (!stream) { alert('Camera not ready, please wait...'); return; }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth || 640;
+  canvas.height = video.videoHeight || 480;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+  const imageData = canvas.toDataURL('image/jpeg', 0.85);
+
+  document.getElementById('scan-btn').disabled = true;
+  document.getElementById('scan-btn').textContent = '⏳ Scanning...';
+  document.getElementById('scanning-msg').style.display = 'block';
+  document.getElementById('result-card').style.display = 'none';
+  document.getElementById('no-match-card').style.display = 'none';
+
+  try {
+    const res = await fetch('/api/recognize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: imageData })
+    });
+    const data = await res.json();
+    document.getElementById('scanning-msg').style.display = 'none';
+    document.getElementById('scan-btn').disabled = false;
+    document.getElementById('scan-btn').textContent = '🔍 Scan Student Face';
+
+    if (data.match) showResult(data);
+    else showNoMatch(data.message || 'Not recognized');
+  } catch(e) {
+    document.getElementById('scanning-msg').style.display = 'none';
+    document.getElementById('scan-btn').disabled = false;
+    document.getElementById('scan-btn').textContent = '🔍 Scan Student Face';
+    showNoMatch('Server error. Try again.');
+  }
+}
+
+function showResult(data){
+  currentStudentId = data.student_id;
+  document.getElementById('result-name').textContent = data.name;
+  document.getElementById('result-roll').textContent = data.roll_no;
+  document.getElementById('result-conf').textContent = 'Confidence: ' + data.confidence + '%';
+  if(data.already_marked){
+    document.getElementById('result-icon').textContent = '✅';
+    document.getElementById('confirm-btns').style.display = 'none';
+    document.getElementById('already-msg').style.display = 'block';
+    document.getElementById('already-msg').textContent = 'Already marked present today!';
+  } else {
+    document.getElementById('result-icon').textContent = '😊';
+    document.getElementById('confirm-btns').style.display = 'grid';
+    document.getElementById('already-msg').style.display = 'none';
+  }
+  document.getElementById('result-card').style.display = 'block';
+}
+
+function showNoMatch(msg){
+  document.getElementById('no-match-msg').textContent = msg;
+  document.getElementById('no-match-card').style.display = 'block';
+}
+
+async function confirmAttendance(){
+  const btn = document.getElementById('confirm-btn');
+  btn.disabled = true; btn.textContent = 'Saving...';
+  const res = await fetch('/api/mark', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ student_id: currentStudentId })
+  });
+  const data = await res.json();
+  if(data.success){
+    btn.textContent = '✅ Marked!';
+    btn.style.background = '#10b981';
+    updateCount();
+    setTimeout(resetScan, 1500);
+  } else {
+    btn.textContent = data.message || 'Error';
+    btn.disabled = false;
+  }
+}
+
+function resetScan(){
+  currentStudentId = null;
+  document.getElementById('result-card').style.display = 'none';
+  document.getElementById('no-match-card').style.display = 'none';
+  const btn = document.getElementById('confirm-btn');
+  btn.disabled = false; btn.textContent = '✅ Mark Present';
+  btn.style.background = '';
+}
+
+async function updateCount(){
+  const res = await fetch('/api/today_status');
+  const data = await res.json();
+  const count = data.filter(s => s.present).length;
+  document.getElementById('today-count').textContent = count + ' / ' + data.length;
+}
+
+startCamera();
+updateCount();
+</script>
+{% endblock %}

@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="nav">
+  <div>
+    <div class="nav-title">👋 {{ faculty }}</div>
+    <div class="nav-sub">{{ today }}</div>
+  </div>
+  <a href="/logout" class="nav-btn">Logout</a>
+</div>
+
+<div class="main">
+  {% with messages = get_flashed_messages() %}
+  {% if messages %}<div class="flash">{{ messages[0] }}</div>{% endif %}
+  {% endwith %}
+
+  <!-- Working day status banner -->
+  {% if is_sunday %}
+  <div style="background:rgba(239,68,68,0.12);border:1px solid #ef4444;border-radius:12px;
+              padding:14px 16px;margin-bottom:14px;text-align:center;">
+    <div style="color:#ef4444;font-weight:600;font-size:15px;">🚫 Today is Sunday</div>
+    <div style="color:#ef4444;font-size:13px;margin-top:4px;">No attendance allowed</div>
+  </div>
+
+  {% elif not working_day %}
+  <div style="background:rgba(245,158,11,0.12);border:1px solid #f59e0b;border-radius:12px;
+              padding:16px;margin-bottom:14px;">
+    <div style="color:#f59e0b;font-weight:600;font-size:15px;margin-bottom:4px;">📌 Is today a working day?</div>
+    <div style="color:#94a3b8;font-size:13px;margin-bottom:12px;">
+      If you don't mark it, today will <strong>not</strong> be counted as a working day.
+    </div>
+    <form method="POST" action="/mark_working_day">
+      <button type="submit" class="btn btn-green" style="margin:0;padding:13px;font-size:15px;">
+        ✅ Yes — Mark as Working Day
+      </button>
+    </form>
+  </div>
+
+  {% else %}
+  <div style="background:rgba(16,185,129,0.12);border:1px solid #10b981;border-radius:12px;
+              padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;">
+    <div>
+      <div style="color:#10b981;font-weight:600;font-size:14px;">✅ Working Day Confirmed</div>
+      <div style="color:#94a3b8;font-size:12px;margin-top:2px;">{{ total_working }} total working days recorded</div>
+    </div>
+    {% if present == 0 %}
+    <form method="POST" action="/unmark_working_day">
+      <button type="submit" style="background:none;border:1px solid #ef4444;color:#ef4444;
+              padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;">↩ Undo</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- Time restriction notice -->
+  {% if not is_sunday and not is_time %}
+  <div style="background:rgba(99,102,241,0.1);border:1px solid #6366f1;border-radius:12px;
+              padding:12px 16px;margin-bottom:14px;text-align:center;color:#a5b4fc;font-size:14px;">
+    🕐 Attendance allowed only <strong>9:00 AM – 4:00 PM</strong>
+  </div>
+  {% endif %}
+
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat"><div class="stat-num blue-text">{{ total }}</div><div class="stat-label">Total</div></div>
+    <div class="stat"><div class="stat-num green-text">{{ present }}</div><div class="stat-label">Present</div></div>
+    <div class="stat"><div class="stat-num red-text">{{ absent }}</div><div class="stat-label">Absent</div></div>
+  </div>
+
+  <!-- Scan button -->
+  {% if working_day and is_time and not is_sunday %}
+  <a href="/scan" class="btn btn-scan">📷 Scan Face & Mark Attendance</a>
+  {% else %}
+  <button class="btn btn-scan" disabled style="opacity:0.35;cursor:not-allowed;">📷 Scan Face & Mark Attendance</button>
+  {% endif %}
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
+    <a href="/report" class="btn btn-outline" style="margin:0;padding:14px;font-size:14px;">📊 Reports</a>
+    <a href="/students" class="btn btn-outline" style="margin:0;padding:14px;font-size:14px;">👥 Students</a>
+  </div>
+
+  <!-- Recent attendance -->
+  {% if recent %}
+  <div class="section-header"><div class="section-title">Today's Attendance</div></div>
+  {% for r in recent %}
+  <div class="list-item">
+    <div class="avatar" style="background:var(--green);">✓</div>
+    <div>
+      <div class="list-name">{{ r.name }}</div>
+      <div class="list-sub">{{ r.roll_no }}</div>
+    </div>
+    <div class="ml-auto" style="text-align:right;">
+      <span class="badge badge-present">Present</span>
+      <div style="font-size:12px;color:var(--muted);margin-top:3px;">{{ r.time }}</div>
+    </div>
+  </div>
+  {% endfor %}
+  {% else %}
+  <div class="card" style="text-align:center;padding:28px;">
+    <div style="font-size:34px;margin-bottom:8px;">📋</div>
+    <div style="color:var(--muted);font-size:14px;">No attendance marked today yet.</div>
+  </div>
+  {% endif %}
+
+</div>
+
+<nav class="bottom-nav">
+  <a href="/dashboard" class="bnav-item active"><span class="bnav-icon">🏠</span>Home</a>
+  <a href="/scan" class="bnav-item"><span class="bnav-icon">📷</span>Scan</a>
+  <a href="/report" class="bnav-item"><span class="bnav-icon">📊</span>Report</a>
+  <a href="/students" class="bnav-item"><span class="bnav-icon">👥</span>Students</a>
+</nav>
+{% endblock %}

@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="nav">
+  <a href="/students" class="nav-btn">← Back</a>
+  <div class="nav-title">Add Student</div>
+  <div></div>
+</div>
+
+<div class="main">
+  {% with messages = get_flashed_messages() %}
+  {% if messages %}
+  <div class="flash {{ 'flash-error' if 'No face' in messages[0] or 'exists' in messages[0] else '' }}">
+    {{ messages[0] }}
+  </div>
+  {% endif %}
+  {% endwith %}
+
+  <form method="POST" action="/register_student">
+    <div class="form-group">
+      <label>Student Full Name</label>
+      <input type="text" name="name" placeholder="e.g. Ravi Kumar" required>
+    </div>
+    <div class="form-group">
+      <label>Roll Number</label>
+      <input type="text" name="roll_no" placeholder="e.g. 22CS045" required>
+    </div>
+
+    <div class="form-group">
+      <label>Face Photo</label>
+      <video id="reg-video" autoplay playsinline muted
+             style="width:100%;border-radius:14px;aspect-ratio:4/3;object-fit:cover;background:#000;display:block;"></video>
+      <img id="captured-img" style="width:100%;border-radius:14px;display:none;" />
+      <input type="hidden" name="image_data" id="image_data">
+    </div>
+
+    <button type="button" class="btn btn-outline" id="cam-btn" onclick="startCam()">📷 Start Camera</button>
+    <button type="button" class="btn btn-primary" id="capture-btn" onclick="capture()" style="display:none;">📸 Capture Photo</button>
+    <button type="button" class="btn btn-outline" id="retake-btn" onclick="retake()" style="display:none;">🔄 Retake</button>
+    <button type="submit" class="btn btn-green" id="save-btn" style="display:none;margin-top:4px;">✅ Save Student</button>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let stream;
+function startCam(){
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } })
+  .then(s => {
+    stream = s;
+    document.getElementById('reg-video').srcObject = s;
+    document.getElementById('cam-btn').style.display = 'none';
+    document.getElementById('capture-btn').style.display = 'block';
+  })
+  .catch(e => alert('Camera error: ' + e.message + '\nMake sure you opened via https://'));
+}
+function capture(){
+  const v = document.getElementById('reg-video');
+  const c = document.createElement('canvas');
+  c.width = v.videoWidth; c.height = v.videoHeight;
+  c.getContext('2d').drawImage(v, 0, 0);
+  const data = c.toDataURL('image/jpeg', 0.9);
+  document.getElementById('image_data').value = data;
+  document.getElementById('captured-img').src = data;
+  document.getElementById('captured-img').style.display = 'block';
+  document.getElementById('reg-video').style.display = 'none';
+  stream.getTracks().forEach(t => t.stop());
+  document.getElementById('capture-btn').style.display = 'none';
+  document.getElementById('retake-btn').style.display = 'block';
+  document.getElementById('save-btn').style.display = 'block';
+}
+function retake(){
+  document.getElementById('captured-img').style.display = 'none';
+  document.getElementById('reg-video').style.display = 'block';
+  document.getElementById('image_data').value = '';
+  document.getElementById('save-btn').style.display = 'none';
+  document.getElementById('retake-btn').style.display = 'none';
+  startCam();
+}
+</script>
+{% endblock %}

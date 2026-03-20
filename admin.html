@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="nav">
+  <div>
+    <div class="nav-title">🔐 Admin Panel</div>
+    <div class="nav-sub">FRS Attendance System</div>
+  </div>
+  <a href="/admin/logout" class="nav-btn">Logout</a>
+</div>
+
+<div class="main">
+
+  {% with messages = get_flashed_messages() %}
+  {% if messages %}<div class="flash">{{ messages[0] }}</div>{% endif %}
+  {% endwith %}
+
+  <!-- Stats -->
+  <div class="stats" style="margin-bottom:20px;">
+    <div class="stat">
+      <div class="stat-num blue-text">{{ faculties|length }}</div>
+      <div class="stat-label">Faculty</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num green-text">{{ total_students }}</div>
+      <div class="stat-label">Students</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" style="color:var(--orange);">{{ total_working }}</div>
+      <div class="stat-label">Working Days</div>
+    </div>
+  </div>
+
+  <!-- Add Faculty -->
+  <div class="card" style="margin-bottom:20px;">
+    <div class="section-title" style="margin-bottom:14px;">➕ Add Faculty</div>
+    <form method="POST">
+      <input type="hidden" name="action" value="add">
+      <div class="form-group">
+        <label>Full Name</label>
+        <input type="text" name="name" placeholder="e.g. Dr. Suresh Kumar" required>
+      </div>
+      <div class="form-group">
+        <label>Username</label>
+        <input type="text" name="username" placeholder="e.g. suresh123" required>
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label>Password</label>
+        <input type="password" name="password" placeholder="Set a strong password" required>
+      </div>
+      <button type="submit" class="btn btn-primary" style="margin-top:14px;">Add Faculty</button>
+    </form>
+  </div>
+
+  <!-- Faculty List -->
+  <div class="section-header">
+    <div class="section-title">👨‍🏫 Faculty Accounts</div>
+    <div style="font-size:12px;color:var(--muted);">{{ faculties|length }} total</div>
+  </div>
+
+  {% if faculties %}
+  {% for f in faculties %}
+  <div class="list-item">
+    <div class="avatar">{{ f['name'][0].upper() }}</div>
+    <div>
+      <div class="list-name">{{ f['name'] }}</div>
+      <div class="list-sub">@{{ f['username'] }}</div>
+    </div>
+    <div class="ml-auto">
+      <form method="POST" onsubmit="return confirm('Delete {{ f['name'] }}?')">
+        <input type="hidden" name="action" value="delete">
+        <input type="hidden" name="faculty_id" value="{{ f['id'] }}">
+        <button type="submit" style="background:none;border:none;color:var(--red);font-size:20px;cursor:pointer;">🗑</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+  {% else %}
+  <div class="card" style="text-align:center;padding:30px;">
+    <div style="font-size:36px;">👨‍🏫</div>
+    <div style="color:var(--muted);margin-top:8px;font-size:14px;">No faculty added yet.</div>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}
