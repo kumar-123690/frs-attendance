@@ -1,10 +1,10 @@
 from flask import Flask, render_template, request, redirect, session, flash, jsonify, make_response
-import sqlite3, os, base64, face_recognition, numpy as np
+import sqlite3, os, base64, numpy as np
 from PIL import Image
 from io import BytesIO, StringIO
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
-import csv
+import csv, cv2
 
 app = Flask(__name__)
 app.secret_key = "frs_secret_2024"
@@ -12,9 +12,8 @@ app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
 
 ATTENDANCE_START = 9
 ATTENDANCE_END   = 16
-
-ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "admin@123"
+ADMIN_USERNAME   = "admin"
+ADMIN_PASSWORD   = "admin@123"
 
 os.makedirs("static/faces", exist_ok=True)
 
@@ -37,6 +36,7 @@ def init_db():
             name TEXT NOT NULL,
             roll_no TEXT UNIQUE NOT NULL,
             face_image TEXT NOT NULL,
+            face_encoding BLOB,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS working_days (
@@ -53,6 +53,11 @@ def init_db():
             UNIQUE(student_id, date)
         );
     """)
+    # Add face_encoding column if missing
+    try:
+        conn.execute("ALTER TABLE students ADD COLUMN face_encoding BLOB")
+    except:
+        pass
     conn.commit()
     conn.close()
 
@@ -80,25 +85,53 @@ def get_working_day_today():
     conn.close()
     return wd
 
-def load_all_face_encodings():
+# ===== FACE RECOGNITION USING OPENCV LBPH =====
+def get_face_detector():
+    cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    return cv2.CascadeClassifier(cascade_path)
+
+def extract_face(image_array):
+    """Extract and resize face from image array."""
+    detector = get_face_detector()
+    gray = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
+    faces = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(50,50))
+    if len(faces) == 0:
+        return None
+    x, y, w, h = faces[0]
+    face = gray[y:y+h, x:x+w]
+    face = cv2.resize(face, (100, 100))
+    return face
+
+def compute_histogram(face_array):
+    """Compute LBP-like histogram for face matching."""
+    hist = cv2.calcHist([face_array], [0], None, [256], [0, 256])
+    hist = cv2.normalize(hist, hist).flatten()
+    return hist
+
+def encode_face_from_image(image_array):
+    """Get face encoding from image array."""
+    face = extract_face(image_array)
+    if face is None:
+        return None
+    return compute_histogram(face)
+
+def load_all_encodings():
+    """Load all student encodings from DB."""
     conn = get_db()
-    students = conn.execute("SELECT id, name, roll_no, face_image FROM students").fetchall()
+    students = conn.execute("SELECT id, name, roll_no, face_encoding FROM students WHERE face_encoding IS NOT NULL").fetchall()
     conn.close()
-    encodings = []
+    result = []
     for s in students:
-        path = f"static/faces/{s['face_image']}"
-        if os.path.exists(path):
-            try:
-                img = face_recognition.load_image_file(path)
-                encs = face_recognition.face_encodings(img)
-                if encs:
-                    encodings.append({
-                        "id": s["id"], "name": s["name"],
-                        "roll_no": s["roll_no"], "encoding": encs[0]
-                    })
-            except:
-                pass
-    return encodings
+        enc = np.frombuffer(s["face_encoding"], dtype=np.float32)
+        result.append({"id": s["id"], "name": s["name"], "roll_no": s["roll_no"], "encoding": enc})
+    return result
+
+def compare_faces(known_enc, unknown_enc, threshold=0.7):
+    """Compare two face histograms. Returns similarity score."""
+    score = cv2.compareHist(known_enc.reshape(-1,1).astype(np.float32),
+                            unknown_enc.reshape(-1,1).astype(np.float32),
+                            cv2.HISTCMP_CORREL)
+    return score  # 1.0 = identical, higher is better
 
 def get_report_data(start_date, end_date):
     conn = get_db()
@@ -126,14 +159,13 @@ def get_report_data(start_date, end_date):
     conn.close()
     return rows, working_dates, total_working
 
-# ===== HOME =====
+# ===== AUTH =====
 @app.route("/")
 def home():
     if "faculty" in session: return redirect("/dashboard")
     if "admin" in session: return redirect("/admin")
     return redirect("/login")
 
-# ===== FACULTY LOGIN =====
 @app.route("/login", methods=["GET","POST"])
 def login():
     if request.method == "POST":
@@ -155,7 +187,6 @@ def logout():
     session.clear()
     return redirect("/login")
 
-# ===== ADMIN LOGIN =====
 @app.route("/admin/login", methods=["GET","POST"])
 def admin_login():
     if request.method == "POST":
@@ -173,11 +204,9 @@ def admin_logout():
     session.pop("admin", None)
     return redirect("/admin/login")
 
-# ===== ADMIN PANEL =====
 @app.route("/admin", methods=["GET","POST"])
 def admin_panel():
-    if "admin" not in session:
-        return redirect("/admin/login")
+    if "admin" not in session: return redirect("/admin/login")
     conn = get_db()
     if request.method == "POST":
         action = request.form.get("action")
@@ -198,13 +227,12 @@ def admin_panel():
             conn.execute("DELETE FROM faculty WHERE id=?", (fid,))
             conn.commit()
             flash("Faculty deleted.")
-    faculties = conn.execute("SELECT * FROM faculty ORDER BY name").fetchall()
+    faculties      = conn.execute("SELECT * FROM faculty ORDER BY name").fetchall()
     total_students = conn.execute("SELECT COUNT(*) as c FROM students").fetchone()["c"]
     total_working  = conn.execute("SELECT COUNT(*) as c FROM working_days").fetchone()["c"]
     total_att      = conn.execute("SELECT COUNT(*) as c FROM attendance").fetchone()["c"]
     conn.close()
-    return render_template("admin.html",
-                           faculties=faculties,
+    return render_template("admin.html", faculties=faculties,
                            total_students=total_students,
                            total_working=total_working,
                            total_att=total_att)
@@ -229,8 +257,7 @@ def dashboard():
                            total=total_students,
                            present=present_today,
                            absent=total_students - present_today,
-                           recent=recent,
-                           today=today(),
+                           recent=recent, today=today(),
                            is_sunday=is_sunday(),
                            is_time=is_attendance_time(),
                            working_day=working_day,
@@ -295,29 +322,36 @@ def recognize():
         unknown_img = np.array(img)
     except:
         return jsonify({"error":"Invalid image"}), 400
-    unknown_encs = face_recognition.face_encodings(unknown_img)
-    if not unknown_encs:
+
+    unknown_enc = encode_face_from_image(unknown_img)
+    if unknown_enc is None:
         return jsonify({"match":False, "message":"No face detected. Move closer."})
-    known = load_all_face_encodings()
+
+    known = load_all_encodings()
     if not known:
         return jsonify({"match":False, "message":"No students registered yet!"})
-    distances = face_recognition.face_distance([k["encoding"] for k in known], unknown_encs[0])
-    best_idx  = int(np.argmin(distances))
-    best_dist = float(distances[best_idx])
-    if best_dist < 0.45:
-        student = known[best_idx]
+
+    best_score = -1
+    best_student = None
+    for k in known:
+        score = compare_faces(k["encoding"], unknown_enc)
+        if score > best_score:
+            best_score = score
+            best_student = k
+
+    if best_score > 0.75:
         conn = get_db()
         already = conn.execute(
             "SELECT id FROM attendance WHERE student_id=? AND date=?",
-            (student["id"], today())).fetchone()
+            (best_student["id"], today())).fetchone()
         conn.close()
         return jsonify({
             "match": True,
-            "student_id": student["id"],
-            "name": student["name"],
-            "roll_no": student["roll_no"],
+            "student_id": best_student["id"],
+            "name": best_student["name"],
+            "roll_no": best_student["roll_no"],
             "already_marked": already is not None,
-            "confidence": round((1 - best_dist) * 100, 1)
+            "confidence": round(best_score * 100, 1)
         })
     return jsonify({"match":False, "message":"Face not recognized. Try again."})
 
@@ -365,19 +399,21 @@ def register_student():
             return redirect("/register_student")
         try:
             img_bytes = base64.b64decode(image_data.split(",")[1])
-            img = Image.open(BytesIO(img_bytes))
+            img = Image.open(BytesIO(img_bytes)).convert("RGB")
+            img_array = np.array(img)
+
+            encoding = encode_face_from_image(img_array)
+            if encoding is None:
+                flash("No face detected! Retake in good lighting.")
+                return redirect("/register_student")
+
             filename = f"{roll_no}.jpg"
             path = f"static/faces/{filename}"
             img.save(path)
-            loaded = face_recognition.load_image_file(path)
-            encs = face_recognition.face_encodings(loaded)
-            if not encs:
-                os.remove(path)
-                flash("No face detected! Retake in good lighting.")
-                return redirect("/register_student")
+
             conn = get_db()
-            conn.execute("INSERT INTO students(name,roll_no,face_image) VALUES(?,?,?)",
-                         (name, roll_no, filename))
+            conn.execute("INSERT INTO students(name,roll_no,face_image,face_encoding) VALUES(?,?,?,?)",
+                         (name, roll_no, filename, encoding.astype(np.float32).tobytes()))
             conn.commit(); conn.close()
             flash(f"✅ '{name}' registered!")
             return redirect("/students")
@@ -433,7 +469,7 @@ def download_csv():
     if "faculty" not in session: return redirect("/login")
     date_from = request.args.get("from", today())
     date_to   = request.args.get("to", today())
-    rows, working_dates, total_working = get_report_data(date_from, date_to)
+    rows, working_dates, _ = get_report_data(date_from, date_to)
     si = StringIO()
     writer = csv.writer(si)
     header = ["Roll No","Name","Present","Absent","Total Working Days","Attendance %"] + working_dates
