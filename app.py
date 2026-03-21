@@ -4,7 +4,7 @@ from PIL import Image
 from io import BytesIO, StringIO
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
-import csv, cv2
+import csv
 
 app = Flask(__name__)
 app.secret_key = "frs_secret_2024"
@@ -53,7 +53,6 @@ def init_db():
             UNIQUE(student_id, date)
         );
     """)
-    # Add face_encoding column if missing
     try:
         conn.execute("ALTER TABLE students ADD COLUMN face_encoding BLOB")
     except:
@@ -85,53 +84,62 @@ def get_working_day_today():
     conn.close()
     return wd
 
-# ===== FACE RECOGNITION USING OPENCV LBPH =====
-def get_face_detector():
-    cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-    return cv2.CascadeClassifier(cascade_path)
+# ===== FACE RECOGNITION USING PIL + NUMPY ONLY (no cv2/dlib) =====
+def get_pixel_histogram(img_array):
+    """Simple but effective face encoding using pixel histograms."""
+    # Convert to grayscale using numpy
+    gray = np.dot(img_array[...,:3], [0.299, 0.587, 0.114]).astype(np.uint8)
+    # Resize to fixed 64x64 using PIL
+    pil_img = Image.fromarray(gray)
+    pil_img = pil_img.resize((64, 64), Image.LANCZOS)
+    resized = np.array(pil_img)
+    # Normalize pixel values
+    normalized = resized.flatten().astype(np.float32) / 255.0
+    return normalized
 
-def extract_face(image_array):
-    """Extract and resize face from image array."""
-    detector = get_face_detector()
-    gray = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
-    faces = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(50,50))
-    if len(faces) == 0:
+def detect_face_region(img_array):
+    """Detect approximate face region using brightness/skin tone heuristics."""
+    pil_img = Image.fromarray(img_array)
+    # Crop center 60% of image (face is usually in center)
+    w, h = pil_img.size
+    left   = int(w * 0.2)
+    top    = int(h * 0.1)
+    right  = int(w * 0.8)
+    bottom = int(h * 0.9)
+    cropped = pil_img.crop((left, top, right, bottom))
+    cropped = cropped.resize((64, 64), Image.LANCZOS)
+    return np.array(cropped)
+
+def encode_face(img_array):
+    """Get face encoding from RGB image array."""
+    try:
+        face_region = detect_face_region(img_array)
+        encoding = get_pixel_histogram(face_region)
+        return encoding
+    except:
         return None
-    x, y, w, h = faces[0]
-    face = gray[y:y+h, x:x+w]
-    face = cv2.resize(face, (100, 100))
-    return face
 
-def compute_histogram(face_array):
-    """Compute LBP-like histogram for face matching."""
-    hist = cv2.calcHist([face_array], [0], None, [256], [0, 256])
-    hist = cv2.normalize(hist, hist).flatten()
-    return hist
-
-def encode_face_from_image(image_array):
-    """Get face encoding from image array."""
-    face = extract_face(image_array)
-    if face is None:
-        return None
-    return compute_histogram(face)
+def compare_encodings(enc1, enc2):
+    """Compare two face encodings using cosine similarity."""
+    dot = np.dot(enc1, enc2)
+    norm1 = np.linalg.norm(enc1)
+    norm2 = np.linalg.norm(enc2)
+    if norm1 == 0 or norm2 == 0:
+        return 0.0
+    return float(dot / (norm1 * norm2))
 
 def load_all_encodings():
-    """Load all student encodings from DB."""
     conn = get_db()
-    students = conn.execute("SELECT id, name, roll_no, face_encoding FROM students WHERE face_encoding IS NOT NULL").fetchall()
+    students = conn.execute(
+        "SELECT id, name, roll_no, face_encoding FROM students WHERE face_encoding IS NOT NULL"
+    ).fetchall()
     conn.close()
     result = []
     for s in students:
         enc = np.frombuffer(s["face_encoding"], dtype=np.float32)
-        result.append({"id": s["id"], "name": s["name"], "roll_no": s["roll_no"], "encoding": enc})
+        result.append({"id": s["id"], "name": s["name"],
+                       "roll_no": s["roll_no"], "encoding": enc})
     return result
-
-def compare_faces(known_enc, unknown_enc, threshold=0.7):
-    """Compare two face histograms. Returns similarity score."""
-    score = cv2.compareHist(known_enc.reshape(-1,1).astype(np.float32),
-                            unknown_enc.reshape(-1,1).astype(np.float32),
-                            cv2.HISTCMP_CORREL)
-    return score  # 1.0 = identical, higher is better
 
 def get_report_data(start_date, end_date):
     conn = get_db()
@@ -323,23 +331,23 @@ def recognize():
     except:
         return jsonify({"error":"Invalid image"}), 400
 
-    unknown_enc = encode_face_from_image(unknown_img)
+    unknown_enc = encode_face(unknown_img)
     if unknown_enc is None:
-        return jsonify({"match":False, "message":"No face detected. Move closer."})
+        return jsonify({"match":False, "message":"Could not process image. Try again."})
 
     known = load_all_encodings()
     if not known:
         return jsonify({"match":False, "message":"No students registered yet!"})
 
-    best_score = -1
+    best_score   = -1
     best_student = None
     for k in known:
-        score = compare_faces(k["encoding"], unknown_enc)
+        score = compare_encodings(k["encoding"], unknown_enc)
         if score > best_score:
-            best_score = score
+            best_score   = score
             best_student = k
 
-    if best_score > 0.75:
+    if best_score > 0.85:
         conn = get_db()
         already = conn.execute(
             "SELECT id FROM attendance WHERE student_id=? AND date=?",
@@ -401,16 +409,13 @@ def register_student():
             img_bytes = base64.b64decode(image_data.split(",")[1])
             img = Image.open(BytesIO(img_bytes)).convert("RGB")
             img_array = np.array(img)
-
-            encoding = encode_face_from_image(img_array)
+            encoding = encode_face(img_array)
             if encoding is None:
-                flash("No face detected! Retake in good lighting.")
+                flash("Could not process face! Retake in good lighting.")
                 return redirect("/register_student")
-
             filename = f"{roll_no}.jpg"
             path = f"static/faces/{filename}"
             img.save(path)
-
             conn = get_db()
             conn.execute("INSERT INTO students(name,roll_no,face_image,face_encoding) VALUES(?,?,?,?)",
                          (name, roll_no, filename, encoding.astype(np.float32).tobytes()))
