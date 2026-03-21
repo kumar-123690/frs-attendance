@@ -4,6 +4,7 @@ from PIL import Image
 from io import BytesIO, StringIO
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
+import pytz
 import csv
 
 app = Flask(__name__)
@@ -11,6 +12,7 @@ app.secret_key = "frs_secret_2024"
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
 
 ATTENDANCE_START = 9
+TIMEZONE = pytz.timezone("Asia/Kolkata")  # IST
 ATTENDANCE_END   = 16
 ADMIN_USERNAME   = "admin"
 ADMIN_PASSWORD   = "admin@123"
@@ -18,7 +20,7 @@ ADMIN_PASSWORD   = "admin@123"
 os.makedirs("static/faces", exist_ok=True)
 
 def get_db():
-    conn = sqlite3.connect("database.db")
+    conn = sqlite3.connect(os.environ.get("DB_PATH", "database.db"))
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -63,19 +65,19 @@ def init_db():
 init_db()
 
 def today():
-    return datetime.now().strftime("%Y-%m-%d")
+    return datetime.now(TIMEZONE).strftime("%Y-%m-%d")
 
 def now_time():
-    return datetime.now().strftime("%H:%M:%S")
+    return datetime.now(TIMEZONE).strftime("%H:%M:%S")
 
 def now_str():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
 
 def is_sunday():
-    return datetime.now().weekday() == 6
+    return datetime.now(TIMEZONE).weekday() == 6
 
 def is_attendance_time():
-    h = datetime.now().hour
+    h = datetime.now(TIMEZONE).hour
     return ATTENDANCE_START <= h < ATTENDANCE_END
 
 def get_working_day_today():
