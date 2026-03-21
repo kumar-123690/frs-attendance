@@ -1,68 +1,76 @@
 from flask import Flask, render_template, request, redirect, session, flash, jsonify, make_response
-import sqlite3, os, base64, numpy as np
+import os, base64, numpy as np
 from PIL import Image
 from io import BytesIO, StringIO
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
-import pytz
-import csv
+import csv, pytz, psycopg2
+from psycopg2.extras import RealDictCursor
 
 app = Flask(__name__)
 app.secret_key = "frs_secret_2024"
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
 
 ATTENDANCE_START = 9
-TIMEZONE = pytz.timezone("Asia/Kolkata")  # IST
 ATTENDANCE_END   = 16
 ADMIN_USERNAME   = "admin"
 ADMIN_PASSWORD   = "admin@123"
+TIMEZONE         = pytz.timezone("Asia/Kolkata")
+
+DATABASE_URL = os.environ.get("DATABASE_URL",
+    "postgresql://postgres:@kumar_1729@db.sswoogvrbnlmhkmcfldz.supabase.co:5432/postgres")
 
 os.makedirs("static/faces", exist_ok=True)
 
 def get_db():
-    conn = sqlite3.connect(os.environ.get("DB_PATH", "database.db"))
-    conn.row_factory = sqlite3.Row
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     return conn
 
 def init_db():
     conn = get_db()
-    conn.executescript("""
+    c = conn.cursor()
+    c.execute("""
         CREATE TABLE IF NOT EXISTS faculty (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             name TEXT NOT NULL,
             username TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL
-        );
+        )
+    """)
+    c.execute("""
         CREATE TABLE IF NOT EXISTS students (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             name TEXT NOT NULL,
             roll_no TEXT UNIQUE NOT NULL,
             face_image TEXT NOT NULL,
-            face_encoding BLOB,
+            face_encoding BYTEA,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
+        )
+    """)
+    c.execute("""
         CREATE TABLE IF NOT EXISTS working_days (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             date TEXT UNIQUE NOT NULL,
             marked_by TEXT NOT NULL
-        );
+        )
+    """)
+    c.execute("""
         CREATE TABLE IF NOT EXISTS attendance (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             student_id INTEGER NOT NULL,
             date TEXT NOT NULL,
             time TEXT NOT NULL,
             marked_by TEXT NOT NULL,
             UNIQUE(student_id, date)
-        );
+        )
     """)
-    try:
-        conn.execute("ALTER TABLE students ADD COLUMN face_encoding BLOB")
-    except:
-        pass
     conn.commit()
     conn.close()
 
-init_db()
+try:
+    init_db()
+except Exception as e:
+    print(f"DB init error: {e}")
 
 def today():
     return datetime.now(TIMEZONE).strftime("%Y-%m-%d")
@@ -82,80 +90,63 @@ def is_attendance_time():
 
 def get_working_day_today():
     conn = get_db()
-    wd = conn.execute("SELECT * FROM working_days WHERE date=?", (today(),)).fetchone()
+    c = conn.cursor()
+    c.execute("SELECT * FROM working_days WHERE date=%s", (today(),))
+    wd = c.fetchone()
     conn.close()
     return wd
 
-# ===== FACE RECOGNITION USING PIL + NUMPY ONLY (no cv2/dlib) =====
-def get_pixel_histogram(img_array):
-    """Simple but effective face encoding using pixel histograms."""
-    # Convert to grayscale using numpy
-    gray = np.dot(img_array[...,:3], [0.299, 0.587, 0.114]).astype(np.uint8)
-    # Resize to fixed 64x64 using PIL
-    pil_img = Image.fromarray(gray)
-    pil_img = pil_img.resize((64, 64), Image.LANCZOS)
-    resized = np.array(pil_img)
-    # Normalize pixel values
-    normalized = resized.flatten().astype(np.float32) / 255.0
-    return normalized
-
 def detect_face_region(img_array):
-    """Detect approximate face region using brightness/skin tone heuristics."""
     pil_img = Image.fromarray(img_array)
-    # Crop center 60% of image (face is usually in center)
     w, h = pil_img.size
-    left   = int(w * 0.2)
-    top    = int(h * 0.1)
-    right  = int(w * 0.8)
-    bottom = int(h * 0.9)
-    cropped = pil_img.crop((left, top, right, bottom))
-    cropped = cropped.resize((64, 64), Image.LANCZOS)
-    return np.array(cropped)
+    cropped = pil_img.crop((int(w*0.2), int(h*0.1), int(w*0.8), int(h*0.9)))
+    return np.array(cropped.resize((64, 64), Image.LANCZOS))
 
 def encode_face(img_array):
-    """Get face encoding from RGB image array."""
     try:
-        face_region = detect_face_region(img_array)
-        encoding = get_pixel_histogram(face_region)
-        return encoding
+        face = detect_face_region(img_array)
+        gray = np.dot(face[...,:3], [0.299, 0.587, 0.114]).astype(np.uint8)
+        hist = np.zeros(256, dtype=np.float32)
+        for val in gray.flatten():
+            hist[val] += 1
+        norm = np.linalg.norm(hist)
+        return (hist / norm) if norm > 0 else hist
     except:
         return None
 
 def compare_encodings(enc1, enc2):
-    """Compare two face encodings using cosine similarity."""
     dot = np.dot(enc1, enc2)
-    norm1 = np.linalg.norm(enc1)
-    norm2 = np.linalg.norm(enc2)
-    if norm1 == 0 or norm2 == 0:
-        return 0.0
-    return float(dot / (norm1 * norm2))
+    n1, n2 = np.linalg.norm(enc1), np.linalg.norm(enc2)
+    if n1 == 0 or n2 == 0: return 0.0
+    return float(dot / (n1 * n2))
 
 def load_all_encodings():
     conn = get_db()
-    students = conn.execute(
-        "SELECT id, name, roll_no, face_encoding FROM students WHERE face_encoding IS NOT NULL"
-    ).fetchall()
+    c = conn.cursor()
+    c.execute("SELECT id, name, roll_no, face_encoding FROM students WHERE face_encoding IS NOT NULL")
+    students = c.fetchall()
     conn.close()
     result = []
     for s in students:
-        enc = np.frombuffer(s["face_encoding"], dtype=np.float32)
+        enc = np.frombuffer(bytes(s["face_encoding"]), dtype=np.float32)
         result.append({"id": s["id"], "name": s["name"],
                        "roll_no": s["roll_no"], "encoding": enc})
     return result
 
 def get_report_data(start_date, end_date):
     conn = get_db()
-    all_students = conn.execute("SELECT * FROM students ORDER BY name").fetchall()
-    working_days = conn.execute(
-        "SELECT date FROM working_days WHERE date>=? AND date<=? ORDER BY date",
-        (start_date, end_date)).fetchall()
-    working_dates = [w["date"] for w in working_days]
+    c = conn.cursor()
+    c.execute("SELECT * FROM students ORDER BY name")
+    all_students = c.fetchall()
+    c.execute("SELECT date FROM working_days WHERE date>=%s AND date<=%s ORDER BY date",
+              (start_date, end_date))
+    working_dates = [w["date"] for w in c.fetchall()]
     total_working = len(working_dates)
     rows = []
     for s in all_students:
-        att = conn.execute(
-            "SELECT date, time FROM attendance WHERE student_id=? AND date>=? AND date<=? ORDER BY date",
-            (s["id"], start_date, end_date)).fetchall()
+        c.execute("SELECT date, time FROM attendance WHERE student_id=%s AND date>=%s AND date<=%s ORDER BY date",
+                  (s["id"], start_date, end_date))
+        att = c.fetchall()
         present_dates = {a["date"]: a["time"] for a in att}
         present_count = len(present_dates)
         pct = round(present_count / total_working * 100, 1) if total_working > 0 else 0
@@ -182,7 +173,9 @@ def login():
         username = request.form["username"].strip()
         password = request.form["password"]
         conn = get_db()
-        f = conn.execute("SELECT * FROM faculty WHERE username=?", (username,)).fetchone()
+        c = conn.cursor()
+        c.execute("SELECT * FROM faculty WHERE username=%s", (username,))
+        f = c.fetchone()
         conn.close()
         if f and check_password_hash(f["password"], password):
             session.permanent = True
@@ -218,6 +211,7 @@ def admin_logout():
 def admin_panel():
     if "admin" not in session: return redirect("/admin/login")
     conn = get_db()
+    c = conn.cursor()
     if request.method == "POST":
         action = request.form.get("action")
         if action == "add":
@@ -226,21 +220,26 @@ def admin_panel():
             password = request.form["password"]
             if name and username and password:
                 try:
-                    conn.execute("INSERT INTO faculty(name,username,password) VALUES(?,?,?)",
-                                 (name, username, generate_password_hash(password)))
+                    c.execute("INSERT INTO faculty(name,username,password) VALUES(%s,%s,%s)",
+                              (name, username, generate_password_hash(password)))
                     conn.commit()
                     flash(f"✅ Faculty '{name}' added!")
-                except sqlite3.IntegrityError:
+                except psycopg2.IntegrityError:
+                    conn.rollback()
                     flash("❌ Username already exists!")
         elif action == "delete":
             fid = request.form.get("faculty_id")
-            conn.execute("DELETE FROM faculty WHERE id=?", (fid,))
+            c.execute("DELETE FROM faculty WHERE id=%s", (fid,))
             conn.commit()
             flash("Faculty deleted.")
-    faculties      = conn.execute("SELECT * FROM faculty ORDER BY name").fetchall()
-    total_students = conn.execute("SELECT COUNT(*) as c FROM students").fetchone()["c"]
-    total_working  = conn.execute("SELECT COUNT(*) as c FROM working_days").fetchone()["c"]
-    total_att      = conn.execute("SELECT COUNT(*) as c FROM attendance").fetchone()["c"]
+    c.execute("SELECT * FROM faculty ORDER BY name")
+    faculties = c.fetchall()
+    c.execute("SELECT COUNT(*) as c FROM students")
+    total_students = c.fetchone()["c"]
+    c.execute("SELECT COUNT(*) as c FROM working_days")
+    total_working = c.fetchone()["c"]
+    c.execute("SELECT COUNT(*) as c FROM attendance")
+    total_att = c.fetchone()["c"]
     conn.close()
     return render_template("admin.html", faculties=faculties,
                            total_students=total_students,
@@ -252,15 +251,18 @@ def admin_panel():
 def dashboard():
     if "faculty" not in session: return redirect("/login")
     conn = get_db()
-    total_students = conn.execute("SELECT COUNT(*) as c FROM students").fetchone()["c"]
-    present_today  = conn.execute("SELECT COUNT(*) as c FROM attendance WHERE date=?", (today(),)).fetchone()["c"]
-    working_day    = get_working_day_today()
-    total_working  = conn.execute("SELECT COUNT(*) as c FROM working_days").fetchone()["c"]
-    recent = conn.execute("""
-        SELECT s.name, s.roll_no, a.time
-        FROM attendance a JOIN students s ON a.student_id=s.id
-        WHERE a.date=? ORDER BY a.time DESC LIMIT 8
-    """, (today(),)).fetchall()
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) as c FROM students")
+    total_students = c.fetchone()["c"]
+    c.execute("SELECT COUNT(*) as c FROM attendance WHERE date=%s", (today(),))
+    present_today = c.fetchone()["c"]
+    working_day = get_working_day_today()
+    c.execute("SELECT COUNT(*) as c FROM working_days")
+    total_working = c.fetchone()["c"]
+    c.execute("""SELECT s.name, s.roll_no, a.time
+                 FROM attendance a JOIN students s ON a.student_id=s.id
+                 WHERE a.date=%s ORDER BY a.time DESC LIMIT 8""", (today(),))
+    recent = c.fetchall()
     conn.close()
     return render_template("dashboard.html",
                            faculty=session["faculty"],
@@ -280,12 +282,14 @@ def mark_working_day():
         flash("❌ Sunday is never a working day!")
         return redirect("/dashboard")
     conn = get_db()
+    c = conn.cursor()
     try:
-        conn.execute("INSERT INTO working_days(date,marked_by) VALUES(?,?)",
-                     (today(), session["faculty_user"]))
+        c.execute("INSERT INTO working_days(date,marked_by) VALUES(%s,%s)",
+                  (today(), session["faculty_user"]))
         conn.commit()
         flash(f"✅ {today()} marked as working day!")
-    except sqlite3.IntegrityError:
+    except psycopg2.IntegrityError:
+        conn.rollback()
         flash("Today is already marked as a working day.")
     conn.close()
     return redirect("/dashboard")
@@ -294,11 +298,13 @@ def mark_working_day():
 def unmark_working_day():
     if "faculty" not in session: return redirect("/login")
     conn = get_db()
-    count = conn.execute("SELECT COUNT(*) as c FROM attendance WHERE date=?", (today(),)).fetchone()["c"]
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) as c FROM attendance WHERE date=%s", (today(),))
+    count = c.fetchone()["c"]
     if count > 0:
         flash("❌ Cannot undo — attendance already taken today!")
     else:
-        conn.execute("DELETE FROM working_days WHERE date=?", (today(),))
+        c.execute("DELETE FROM working_days WHERE date=%s", (today(),))
         conn.commit()
         flash("↩️ Today removed from working days.")
     conn.close()
@@ -332,28 +338,23 @@ def recognize():
         unknown_img = np.array(img)
     except:
         return jsonify({"error":"Invalid image"}), 400
-
     unknown_enc = encode_face(unknown_img)
     if unknown_enc is None:
         return jsonify({"match":False, "message":"Could not process image. Try again."})
-
     known = load_all_encodings()
     if not known:
         return jsonify({"match":False, "message":"No students registered yet!"})
-
-    best_score   = -1
-    best_student = None
+    best_score, best_student = -1, None
     for k in known:
         score = compare_encodings(k["encoding"], unknown_enc)
         if score > best_score:
-            best_score   = score
-            best_student = k
-
+            best_score, best_student = score, k
     if best_score > 0.85:
         conn = get_db()
-        already = conn.execute(
-            "SELECT id FROM attendance WHERE student_id=? AND date=?",
-            (best_student["id"], today())).fetchone()
+        c = conn.cursor()
+        c.execute("SELECT id FROM attendance WHERE student_id=%s AND date=%s",
+                  (best_student["id"], today()))
+        already = c.fetchone()
         conn.close()
         return jsonify({
             "match": True,
@@ -373,15 +374,17 @@ def mark_attendance():
     data = request.get_json()
     student_id = data.get("student_id")
     conn = get_db()
+    c = conn.cursor()
     try:
-        conn.execute(
-            "INSERT INTO attendance(student_id,date,time,marked_by) VALUES(?,?,?,?)",
-            (student_id, today(), now_time(), session["faculty_user"]))
+        c.execute("INSERT INTO attendance(student_id,date,time,marked_by) VALUES(%s,%s,%s,%s)",
+                  (student_id, today(), now_time(), session["faculty_user"]))
         conn.commit()
-        student = conn.execute("SELECT name,roll_no FROM students WHERE id=?", (student_id,)).fetchone()
+        c.execute("SELECT name,roll_no FROM students WHERE id=%s", (student_id,))
+        student = c.fetchone()
         conn.close()
         return jsonify({"success":True, "name":student["name"], "roll_no":student["roll_no"]})
-    except sqlite3.IntegrityError:
+    except psycopg2.IntegrityError:
+        conn.rollback()
         conn.close()
         return jsonify({"success":False, "message":"Already marked"})
 
@@ -389,9 +392,11 @@ def mark_attendance():
 def today_status():
     if "faculty" not in session: return jsonify({"error":"unauthorized"}), 401
     conn = get_db()
-    all_s = conn.execute("SELECT id,name,roll_no FROM students ORDER BY name").fetchall()
-    present_ids = {r["student_id"] for r in
-                   conn.execute("SELECT student_id FROM attendance WHERE date=?", (today(),)).fetchall()}
+    c = conn.cursor()
+    c.execute("SELECT id,name,roll_no FROM students ORDER BY name")
+    all_s = c.fetchall()
+    c.execute("SELECT student_id FROM attendance WHERE date=%s", (today(),))
+    present_ids = {r["student_id"] for r in c.fetchall()}
     conn.close()
     return jsonify([{"id":s["id"],"name":s["name"],"roll_no":s["roll_no"],
                      "present":s["id"] in present_ids} for s in all_s])
@@ -416,15 +421,17 @@ def register_student():
                 flash("Could not process face! Retake in good lighting.")
                 return redirect("/register_student")
             filename = f"{roll_no}.jpg"
-            path = f"static/faces/{filename}"
-            img.save(path)
+            img.save(f"static/faces/{filename}")
             conn = get_db()
-            conn.execute("INSERT INTO students(name,roll_no,face_image,face_encoding) VALUES(?,?,?,?)",
-                         (name, roll_no, filename, encoding.astype(np.float32).tobytes()))
-            conn.commit(); conn.close()
+            c = conn.cursor()
+            c.execute("INSERT INTO students(name,roll_no,face_image,face_encoding) VALUES(%s,%s,%s,%s)",
+                      (name, roll_no, filename,
+                       psycopg2.Binary(encoding.astype(np.float32).tobytes())))
+            conn.commit()
+            conn.close()
             flash(f"✅ '{name}' registered!")
             return redirect("/students")
-        except sqlite3.IntegrityError:
+        except psycopg2.IntegrityError:
             flash("Roll number already exists!")
     return render_template("register_student.html")
 
@@ -432,7 +439,9 @@ def register_student():
 def students():
     if "faculty" not in session: return redirect("/login")
     conn = get_db()
-    all_students = conn.execute("SELECT * FROM students ORDER BY name").fetchall()
+    c = conn.cursor()
+    c.execute("SELECT * FROM students ORDER BY name")
+    all_students = c.fetchall()
     conn.close()
     return render_template("students.html", students=all_students)
 
@@ -440,12 +449,14 @@ def students():
 def delete_student(sid):
     if "faculty" not in session: return redirect("/login")
     conn = get_db()
-    s = conn.execute("SELECT face_image FROM students WHERE id=?", (sid,)).fetchone()
+    c = conn.cursor()
+    c.execute("SELECT face_image FROM students WHERE id=%s", (sid,))
+    s = c.fetchone()
     if s:
         path = f"static/faces/{s['face_image']}"
         if os.path.exists(path): os.remove(path)
-        conn.execute("DELETE FROM attendance WHERE student_id=?", (sid,))
-        conn.execute("DELETE FROM students WHERE id=?", (sid,))
+        c.execute("DELETE FROM attendance WHERE student_id=%s", (sid,))
+        c.execute("DELETE FROM students WHERE id=%s", (sid,))
         conn.commit()
     conn.close()
     flash("Student deleted.")
