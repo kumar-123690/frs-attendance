@@ -3,10 +3,11 @@
   "short_name": "FRS",
   "description": "Face Recognition Attendance System",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#0f0f1a",
-  "theme_color": "#1a1a2e",
-  "orientation": "portrait",
+  "theme_color": "#0f0f1a",
+  "orientation": "portrait-primary",
   "icons": [
     {
       "src": "/static/icon-192.png",
