@@ -17,11 +17,11 @@ ADMIN_USERNAME   = "admin"
 ADMIN_PASSWORD   = "admin@123"
 TIMEZONE         = pytz.timezone("Asia/Kolkata")
 
-DB_HOST     = "db.sswoogvrbnlmhkmcfldz.supabase.co"
+DB_HOST     = "postgres.sswoogvrbnlmhkmcfldz"
 DB_NAME     = "postgres"
 DB_USER     = "postgres"
 DB_PASSWORD = "@kumar_1729"
-DB_PORT     = 5432
+DB_PORT     = 6543
 
 os.makedirs("static/faces", exist_ok=True)
 
