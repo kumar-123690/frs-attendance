@@ -78,15 +78,6 @@
     <a href="/students" class="btn btn-outline" style="margin:0;padding:14px;font-size:14px;">👥 Students</a>
   </div>
 
-  <!-- Download APK -->
-  <a href="/static/downloads/FRSATTENDANCE.apk" download="FRSATTENDANCE.apk"
-     style="display:block;text-decoration:none;">
-    <button class="btn btn-outline" style="width:100%;padding:14px;font-size:15px;
-            background:rgba(99,102,241,0.1);border:1px solid #6366f1;color:#a5b4fc;">
-      📱 Download Android App
-    </button>
-  </a>
-
   <!-- Recent attendance -->
   {% if recent %}
   <div class="section-header"><div class="section-title">Today's Attendance</div></div>
@@ -111,6 +102,16 @@
   {% endif %}
 
 </div>
+
+<!-- Floating Download APK Button (bottom right) -->
+<a href="/static/downloads/FRSATTENDANCE.apk" download="FRSATTENDANCE.apk"
+   style="position:fixed;bottom:80px;right:16px;z-index:999;
+          background:#6366f1;color:white;border-radius:50px;
+          padding:10px 14px;font-size:13px;font-weight:600;
+          text-decoration:none;box-shadow:0 4px 15px rgba(99,102,241,0.4);
+          display:flex;align-items:center;gap:6px;">
+  📱 App
+</a>
 
 <nav class="bottom-nav">
   <a href="/dashboard" class="bnav-item active"><span class="bnav-icon">🏠</span>Home</a>
