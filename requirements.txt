@@ -5,3 +5,4 @@ werkzeug==3.1.6
 gunicorn==21.2.0
 pytz==2024.1
 pg8000==1.31.1
+python-dotenv
