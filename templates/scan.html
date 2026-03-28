@@ -12,12 +12,25 @@
   <div class="scan-container" style="position:relative;border-radius:16px;overflow:hidden;aspect-ratio:4/3;background:#000;margin-bottom:14px;">
     <video id="video" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;"></video>
     <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;">
-      <div id="scan-box" style="width:200px;height:200px;border:3px solid #06b6d4;border-radius:20px;box-shadow:0 0 0 2000px rgba(0,0,0,0.45);"></div>
+      <div id="scan-box" style="width:200px;height:200px;border:3px solid #06b6d4;border-radius:20px;box-shadow:0 0 0 2000px rgba(0,0,0,0.45);transition:border-color 0.3s;"></div>
+    </div>
+    <!-- Switch Camera Button -->
+    <button onclick="switchCamera()" style="position:absolute;top:10px;right:10px;
+            background:rgba(0,0,0,0.5);border:none;border-radius:50%;
+            width:42px;height:42px;font-size:20px;cursor:pointer;">
+      🔄
+    </button>
+    <!-- Auto scan status -->
+    <div id="auto-status" style="position:absolute;bottom:10px;left:0;right:0;text-align:center;">
+      <span style="background:rgba(0,0,0,0.6);color:#06b6d4;font-size:12px;padding:4px 12px;border-radius:20px;">
+        🔍 Auto scanning...
+      </span>
     </div>
   </div>
 
+  <!-- Manual scan button -->
   <button class="btn btn-scan" id="scan-btn" onclick="captureAndRecognize()">
-    🔍 Scan Student Face
+    🔍 Scan Now
   </button>
 
   <div id="scanning-msg" style="text-align:center;color:#94a3b8;font-size:15px;display:none;margin:10px 0;">
@@ -65,25 +78,62 @@
 <script>
 let currentStudentId = null;
 let stream = null;
+let facingMode = 'environment';
+let autoScanInterval = null;
+let isScanning = false;
 
-// Start rear camera automatically
+// Start camera
 function startCamera(){
+  if(stream){ stream.getTracks().forEach(t => t.stop()); }
   const constraints = {
-    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 960 } }
+    video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 960 } }
   };
   navigator.mediaDevices.getUserMedia(constraints)
-  .then(s => { stream = s; document.getElementById('video').srcObject = s; })
+  .then(s => {
+    stream = s;
+    document.getElementById('video').srcObject = s;
+    startAutoScan();
+  })
   .catch(() => {
-    // fallback to any camera
     navigator.mediaDevices.getUserMedia({ video: true })
-    .then(s => { stream = s; document.getElementById('video').srcObject = s; })
+    .then(s => {
+      stream = s;
+      document.getElementById('video').srcObject = s;
+      startAutoScan();
+    })
     .catch(e => alert('Camera error: ' + e.message));
   });
 }
 
-async function captureAndRecognize(){
+// Switch between front and rear camera
+function switchCamera(){
+  facingMode = (facingMode === 'environment') ? 'user' : 'environment';
+  stopAutoScan();
+  startCamera();
+}
+
+// Auto scan every 3 seconds
+function startAutoScan(){
+  stopAutoScan();
+  autoScanInterval = setInterval(() => {
+    const resultVisible = document.getElementById('result-card').style.display !== 'none';
+    const noMatchVisible = document.getElementById('no-match-card').style.display !== 'none';
+    if(!isScanning && !resultVisible && !noMatchVisible){
+      captureAndRecognize(true);
+    }
+  }, 3000);
+}
+
+function stopAutoScan(){
+  if(autoScanInterval){
+    clearInterval(autoScanInterval);
+    autoScanInterval = null;
+  }
+}
+
+async function captureAndRecognize(silent = false){
   const video = document.getElementById('video');
-  if (!stream) { alert('Camera not ready, please wait...'); return; }
+  if(!stream || isScanning) return;
 
   const canvas = document.createElement('canvas');
   canvas.width = video.videoWidth || 640;
@@ -91,11 +141,16 @@ async function captureAndRecognize(){
   canvas.getContext('2d').drawImage(video, 0, 0);
   const imageData = canvas.toDataURL('image/jpeg', 0.85);
 
-  document.getElementById('scan-btn').disabled = true;
-  document.getElementById('scan-btn').textContent = '⏳ Scanning...';
-  document.getElementById('scanning-msg').style.display = 'block';
-  document.getElementById('result-card').style.display = 'none';
-  document.getElementById('no-match-card').style.display = 'none';
+  isScanning = true;
+  document.getElementById('scan-box').style.borderColor = '#f59e0b';
+
+  if(!silent){
+    document.getElementById('scan-btn').disabled = true;
+    document.getElementById('scan-btn').textContent = '⏳ Scanning...';
+    document.getElementById('scanning-msg').style.display = 'block';
+    document.getElementById('result-card').style.display = 'none';
+    document.getElementById('no-match-card').style.display = 'none';
+  }
 
   try {
     const res = await fetch('/api/recognize', {
@@ -104,17 +159,28 @@ async function captureAndRecognize(){
       body: JSON.stringify({ image: imageData })
     });
     const data = await res.json();
-    document.getElementById('scanning-msg').style.display = 'none';
-    document.getElementById('scan-btn').disabled = false;
-    document.getElementById('scan-btn').textContent = '🔍 Scan Student Face';
 
-    if (data.match) showResult(data);
-    else showNoMatch(data.message || 'Not recognized');
-  } catch(e) {
+    document.getElementById('scan-box').style.borderColor = '#06b6d4';
     document.getElementById('scanning-msg').style.display = 'none';
     document.getElementById('scan-btn').disabled = false;
-    document.getElementById('scan-btn').textContent = '🔍 Scan Student Face';
-    showNoMatch('Server error. Try again.');
+    document.getElementById('scan-btn').textContent = '🔍 Scan Now';
+    isScanning = false;
+
+    if(data.match){
+      document.getElementById('scan-box').style.borderColor = '#10b981';
+      showResult(data);
+    } else {
+      if(!silent){
+        showNoMatch(data.message || 'Not recognized');
+      }
+    }
+  } catch(e) {
+    document.getElementById('scan-box').style.borderColor = '#06b6d4';
+    document.getElementById('scanning-msg').style.display = 'none';
+    document.getElementById('scan-btn').disabled = false;
+    document.getElementById('scan-btn').textContent = '🔍 Scan Now';
+    isScanning = false;
+    if(!silent) showNoMatch('Server error. Try again.');
   }
 }
 
@@ -165,6 +231,7 @@ function resetScan(){
   currentStudentId = null;
   document.getElementById('result-card').style.display = 'none';
   document.getElementById('no-match-card').style.display = 'none';
+  document.getElementById('scan-box').style.borderColor = '#06b6d4';
   const btn = document.getElementById('confirm-btn');
   btn.disabled = false; btn.textContent = '✅ Mark Present';
   btn.style.background = '';
