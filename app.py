@@ -4,29 +4,31 @@ from PIL import Image
 from io import BytesIO, StringIO
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
-import csv, pytz
+import csv, pytz, ssl
 import pg8000.dbapi as pg
 
 app = Flask(__name__)
-app.secret_key = "frs_secret_2024"
+app.secret_key = os.environ.get("SECRET_KEY", "frs_secret_2024")
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
 
 ATTENDANCE_START = 9
 ATTENDANCE_END   = 16
-ADMIN_USERNAME   = "admin"
-ADMIN_PASSWORD   = "admin@123"
+
+# Admin credentials from environment variables (never hardcoded!)
+ADMIN_USERNAME   = os.environ.get("ADMIN_USERNAME", "frs_admin")
+ADMIN_PASSWORD   = os.environ.get("ADMIN_PASSWORD", "")
+
 TIMEZONE         = pytz.timezone("Asia/Kolkata")
 
 DB_HOST     = os.environ.get("DB_HOST", "db.sswoogvrbnlmhkmcfldz.supabase.co")
 DB_NAME     = os.environ.get("DB_NAME", "postgres")
 DB_USER     = os.environ.get("DB_USER", "postgres")
-DB_PASSWORD = os.environ.get("DB_PASSWORD", "@kumar_1729")
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
 DB_PORT     = int(os.environ.get("DB_PORT", 5432))
 
 os.makedirs("static/faces", exist_ok=True)
 
 def get_db():
-    import ssl
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
@@ -58,6 +60,7 @@ def init_db():
 
 try:
     init_db()
+    print("DB init success!")
 except Exception as e:
     print(f"DB init error: {e}")
 
@@ -85,27 +88,74 @@ def get_working_day_today():
     conn.close()
     return row
 
-def detect_face_region(img_array):
+# ── Improved Face Recognition ──────────────────────────────────────────────
+
+def preprocess_face(img_array):
+    """Crop, resize and normalize face region."""
     pil_img = Image.fromarray(img_array)
     w, h = pil_img.size
-    cropped = pil_img.crop((int(w*0.2), int(h*0.1), int(w*0.8), int(h*0.9)))
-    return np.array(cropped.resize((64, 64), Image.LANCZOS))
+    # crop center region where face likely is
+    cropped = pil_img.crop((int(w*0.15), int(h*0.05), int(w*0.85), int(h*0.95)))
+    resized = cropped.resize((128, 128), Image.LANCZOS)
+    return np.array(resized)
 
 def encode_face(img_array):
+    """Generate a robust face encoding using multiple feature descriptors."""
     try:
-        face = detect_face_region(img_array)
-        gray = np.dot(face[...,:3], [0.299, 0.587, 0.114]).astype(np.uint8)
+        face = preprocess_face(img_array)
+        gray = np.dot(face[...,:3], [0.299, 0.587, 0.114]).astype(np.float32)
+
+        # 1. Normalized histogram (256 bins)
         hist = np.zeros(256, dtype=np.float32)
-        for val in gray.flatten(): hist[val] += 1
+        for val in gray.flatten():
+            hist[int(val)] += 1
         norm = np.linalg.norm(hist)
-        return (hist / norm) if norm > 0 else hist
-    except:
+        hist = (hist / norm) if norm > 0 else hist
+
+        # 2. LBP-like texture features (local patterns)
+        lbp = np.zeros(256, dtype=np.float32)
+        g = gray.astype(np.uint8)
+        for i in range(1, g.shape[0]-1):
+            for j in range(1, g.shape[1]-1):
+                center = g[i, j]
+                code = 0
+                code |= (1 if g[i-1,j-1] >= center else 0) << 7
+                code |= (1 if g[i-1,j]   >= center else 0) << 6
+                code |= (1 if g[i-1,j+1] >= center else 0) << 5
+                code |= (1 if g[i,j+1]   >= center else 0) << 4
+                code |= (1 if g[i+1,j+1] >= center else 0) << 3
+                code |= (1 if g[i+1,j]   >= center else 0) << 2
+                code |= (1 if g[i+1,j-1] >= center else 0) << 1
+                code |= (1 if g[i,j-1]   >= center else 0) << 0
+                lbp[code] += 1
+        lbp_norm = np.linalg.norm(lbp)
+        lbp = (lbp / lbp_norm) if lbp_norm > 0 else lbp
+
+        # 3. Block mean features (divide image into 4x4 blocks)
+        block_features = []
+        block_size = gray.shape[0] // 4
+        for bi in range(4):
+            for bj in range(4):
+                block = gray[bi*block_size:(bi+1)*block_size, bj*block_size:(bj+1)*block_size]
+                block_features.append(float(np.mean(block)) / 255.0)
+                block_features.append(float(np.std(block)) / 128.0)
+        block_arr = np.array(block_features, dtype=np.float32)
+
+        # Combine all features
+        combined = np.concatenate([hist * 0.4, lbp * 0.4, block_arr * 0.2])
+        final_norm = np.linalg.norm(combined)
+        return (combined / final_norm) if final_norm > 0 else combined
+
+    except Exception as e:
+        print(f"Encoding error: {e}")
         return None
 
 def compare_encodings(enc1, enc2):
+    """Cosine similarity between two encodings."""
     dot = np.dot(enc1, enc2)
     n1, n2 = np.linalg.norm(enc1), np.linalg.norm(enc2)
-    if n1 == 0 or n2 == 0: return 0.0
+    if n1 == 0 or n2 == 0:
+        return 0.0
     return float(dot / (n1 * n2))
 
 def load_all_encodings():
@@ -119,6 +169,8 @@ def load_all_encodings():
         enc = np.frombuffer(bytes(r[3]), dtype=np.float32)
         result.append({"id": r[0], "name": r[1], "roll_no": r[2], "encoding": enc})
     return result
+
+# ───────────────────────────────────────────────────────────────────────────
 
 def get_report_data(start_date, end_date):
     conn = get_db()
@@ -176,7 +228,12 @@ def logout():
 @app.route("/admin/login", methods=["GET","POST"])
 def admin_login():
     if request.method == "POST":
-        if request.form["username"].strip() == ADMIN_USERNAME and request.form["password"] == ADMIN_PASSWORD:
+        username = request.form["username"].strip()
+        password = request.form["password"]
+        if not ADMIN_PASSWORD:
+            flash("Admin not configured. Set ADMIN_USERNAME and ADMIN_PASSWORD in environment.")
+            return render_template("admin_login.html")
+        if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
             session.permanent = True
             session["admin"] = True
             return redirect("/admin")
@@ -299,11 +356,18 @@ def recognize():
     known = load_all_encodings()
     if not known:
         return jsonify({"match":False, "message":"No students registered yet!"})
+
+    # find best match
     best_score, best_student = -1, None
     for k in known:
+        if len(k["encoding"]) != len(unknown_enc):
+            continue  # skip mismatched encodings (old format)
         score = compare_encodings(k["encoding"], unknown_enc)
-        if score > best_score: best_score, best_student = score, k
-    if best_score > 0.85:
+        if score > best_score:
+            best_score, best_student = score, k
+
+    # threshold 0.80 for improved recognition
+    if best_score > 0.80:
         conn = get_db()
         c = conn.cursor()
         c.execute("SELECT id FROM attendance WHERE student_id=%s AND date=%s", (best_student["id"], today()))
