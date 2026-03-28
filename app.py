@@ -17,18 +17,19 @@ ADMIN_USERNAME   = "admin"
 ADMIN_PASSWORD   = "admin@123"
 TIMEZONE         = pytz.timezone("Asia/Kolkata")
 
-DB_HOST     = "postgres.sswoogvrbnlmhkmcfldz"
-DB_NAME     = "postgres"
-DB_USER     = "postgres"
-DB_PASSWORD = "@kumar_1729"
-DB_PORT     = 6543
+DB_HOST     = os.environ.get("DB_HOST", "db.sswoogvrbnlmhkmcfldz.supabase.co")
+DB_NAME     = os.environ.get("DB_NAME", "postgres")
+DB_USER     = os.environ.get("DB_USER", "postgres")
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "@kumar_1729")
+DB_PORT     = int(os.environ.get("DB_PORT", 5432))
 
 os.makedirs("static/faces", exist_ok=True)
 
 def get_db():
     conn = pg.connect(
         host=DB_HOST, database=DB_NAME,
-        user=DB_USER, password=DB_PASSWORD, port=DB_PORT
+        user=DB_USER, password=DB_PASSWORD, port=DB_PORT,
+        ssl_context=True
     )
     return conn
 
@@ -443,4 +444,5 @@ def download_pdf():
                            faculty=session["faculty"], generated_at=now_str())
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5000, ssl_context="adhoc")
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
