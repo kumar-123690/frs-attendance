@@ -26,10 +26,14 @@ DB_PORT     = int(os.environ.get("DB_PORT", 5432))
 os.makedirs("static/faces", exist_ok=True)
 
 def get_db():
+    import ssl
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
     conn = pg.connect(
         host=DB_HOST, database=DB_NAME,
         user=DB_USER, password=DB_PASSWORD, port=DB_PORT,
-        ssl_context=True
+        ssl_context=ssl_context
     )
     return conn
 
